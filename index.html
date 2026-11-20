@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+</head>
+<body>
+<title>쿠팡 썸네일 메이커</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  /* 작업 도구: 상단 고정 툴바 + 원본 열 + 썸네일 그리드 */
+  :root{
+    --bg:#f4f4f2; --panel:#fff; --ink:#1c1c1c; --muted:#6b6b68; --line:#e2e2df; --field:#cfcfcc; --hover:#efefec;
+    --accent:#e4322b; --accent-ink:#fff; --guide:#00b7ff;
+  }
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --bg:#18181a; --panel:#232326; --ink:#ececea; --muted:#a3a3a0; --line:#34343a; --field:#46464c; --hover:#2e2e33;
+    --accent:#ff5a4f; --accent-ink:#fff; --guide:#3cc8ff; color-scheme:dark}}
+  :root[data-theme="dark"]{
+    --bg:#18181a; --panel:#232326; --ink:#ececea; --muted:#a3a3a0; --line:#34343a; --field:#46464c; --hover:#2e2e33;
+    --accent:#ff5a4f; --accent-ink:#fff; --guide:#3cc8ff; color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,"Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+  body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--panel)}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding-block:14px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;gap:12px 16px;align-items:center;flex-wrap:wrap;position:sticky;top:env(safe-area-inset-top,0px);z-index:5}
+  header h1{font-size:17px;margin:0 12px 0 0}
+  label.f{display:flex;align-items:center;gap:6px;color:var(--muted)}
+  input[type=text],input[type=number],select{font:inherit;padding:6px 8px;border:1px solid var(--field);border-radius:6px;background:var(--panel);color:var(--ink)}
+  #pn{width:110px;font-weight:600;color:var(--ink)}
+  button{font:inherit;padding:7px 12px;border-radius:6px;border:1px solid var(--field);background:var(--panel);color:var(--ink);cursor:pointer}
+  button:hover{background:var(--hover)}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--guide);outline-offset:1px}
+  #msg{color:var(--ink);background:var(--hover);border-radius:6px;padding:6px 10px;font-size:13px}
+  button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+  button.primary:hover{filter:brightness(.95)}
+  button:disabled{opacity:.45;cursor:default}
+  main{padding-block:20px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));max-width:1400px;margin:0 auto}
+  #drop{border:2px dashed var(--field);border-radius:10px;padding:28px;text-align:center;background:var(--panel);color:var(--muted);cursor:pointer}
+  #drop.over{border-color:var(--accent);color:var(--accent)}
+  #drop b{color:var(--ink)}
+  h2{font-size:15px;margin:26px 0 10px}
+  .hint{color:var(--muted);font-size:13px}
+  #sources{display:flex;gap:14px;flex-wrap:wrap}
+  .src{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;width:220px;max-width:100%}
+  .src .wrap{position:relative;max-height:520px;overflow:auto;cursor:crosshair;user-select:none}
+  .src img{width:100%;display:block}
+  .src .box{position:absolute;border:2px solid var(--accent);pointer-events:none}
+  .src .box span{position:absolute;left:0;top:0;background:var(--accent);color:#fff;font-size:11px;padding:0 4px}
+  .src .draw{position:absolute;border:2px dashed var(--guide);pointer-events:none}
+  .src .name{font-size:12px;color:var(--muted);margin-top:6px;word-break:break-all;display:flex;justify-content:space-between;gap:6px}
+  .src .pnrow{display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:600}
+  .src .pnrow input{flex:1;min-width:0;font-weight:600}
+  .cut{min-width:0}
+  body{overflow-x:clip}
+  #cuts{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(250px,100%),1fr));gap:14px}
+  .cut{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px}
+  .cut.off{opacity:.45}
+  .cut canvas{width:100%;aspect-ratio:1;display:block;border-radius:4px;cursor:pointer;background:#ddd}
+  .cut .row{display:flex;gap:6px;align-items:center}
+  .cut .row input[type=text]{flex:1;min-width:0}
+  .cut .fn{font-weight:600;font-size:13px}
+  .cut .fn.bad{color:var(--accent)}
+  .cut .num{font-size:11px;color:var(--muted)}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}
+  #modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:10;padding:16px}
+  #modal.on{display:flex}
+  #modal .card{background:var(--panel);border-radius:10px;padding:16px;max-width:100%;display:flex;gap:16px;flex-wrap:wrap}
+  #edit{width:min(600px,86vw);height:min(600px,86vw);cursor:grab;touch-action:none;border:1px solid var(--line)}
+  #modal .side{width:230px;display:flex;flex-direction:column;gap:10px}
+  #modal input[type=range]{width:100%}
+  .empty{color:var(--muted);padding:14px 0}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+<header>
+  <h1>쿠팡 썸네일 메이커</h1>
+  <label class="f" title="원본마다 품번을 따로 넣으면 그 품번이 우선이에요">기본 품번 <input id="pn" type="text" placeholder="예: 1958" inputmode="numeric"></label>
+  <label class="f"><input id="showGuide" type="checkbox" checked> 가이드선 보기</label>
+  <label class="f" title="가이드선(50~550px) 안쪽으로 상품과 띄울 간격">가이드 안쪽 여백 <input id="gap" type="number" value="20" min="0" max="200" style="width:64px">px</label>
+  <label class="f" title="배경과 상품을 구분하는 기준. 낮추면 흐린 부분까지 상품으로 잡아요">감도 <input id="thr" type="number" value="22" min="5" max="80" style="width:64px"></label>
+  <span style="flex:1"></span>
+  <button id="dlAll" class="primary" disabled>전체 저장 (ZIP)</button>
+  <button id="dlEach" disabled>전체 개별 저장</button>
+  <div id="msg" style="flex-basis:100%" hidden></div>
+</header>
+<main>
+  <div id="drop">
+    <b>상세페이지 이미지나 상품 사진을 여기에 끌어다 놓거나 클릭해서 선택하세요</b><br>
+    여러 장 가능 · 사진 컷을 자동으로 나눠서 600×600 썸네일로 만들어요 (상품은 가이드선 50~550px 안에, 비율은 그대로)
+    <input id="file" type="file" accept="image/*" multiple hidden>
+  </div>
+
+  <h2>원본 <span class="hint">— 빨간 박스가 자동으로 찾은 사진 컷이에요. 원하는 영역을 마우스로 드래그하면 컷을 직접 추가할 수 있어요. 상품이 여러 개면 원본마다 품번을 넣으세요(비워두면 위의 기본 품번을 써요).</span></h2>
+  <div id="sources"><div class="empty">아직 올린 이미지가 없어요.</div></div>
+
+  <h2>썸네일 <span class="hint">— 썸네일을 클릭하면 위치·크기를 직접 조정할 수 있어요.</span></h2>
+  <div class="bar">
+    <button id="allOn">모두 선택</button><button id="allOff">모두 해제</button>
+    <span class="hint" id="count"></span>
+  </div>
+  <div id="cuts"><div class="empty">원본을 올리면 여기에 나타나요.</div></div>
+</main>
+
+<datalist id="colors"></datalist>
+
+<div id="modal">
+  <div class="card">
+    <canvas id="edit" width="600" height="600"></canvas>
+    <div class="side">
+      <b>위치·크기 조정</b>
+      <div class="hint">드래그해서 이동, 마우스 휠로 확대/축소. 하늘색 선이 PSD 가이드선(50 / 300 / 550px)이에요.</div>
+      <label>크기 <span id="zv">100%</span><input id="zoom" type="range" min="50" max="150" step="1" value="100"></label>
+      <button id="reset">자동 배치로 되돌리기</button>
+      <span style="flex:1"></span>
+      <button id="close" class="primary">완료</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- 설정 (1.psd 기준) ----------
+const OUT = 600;            // 캔버스 600x600
+const G1 = 50, G2 = 550;    // 가이드선
+const INNER = G2 - G1;      // 상품이 들어갈 500px
+const JPG_Q = 0.95;
+
+const COLORS = `블랙	bla
+브라운	bro
+아이보리	ivo
+화이트	whi
+핑크	pin
+블루	blu
+레드	red
+옐로우	yel
+타우페(토프)	tau
+실버	sil
+베이지	bei
+카키	kha
+그레이	gra
+라이트베이지	lib
+카멜	cam
+스카이	sky
+와인	win
+네이비	nav
+바이올렛	vio
+그린	gre
+퍼플	pur
+머스타드	mus
+모카	moc
+핑크베이지	pib
+레몬	rem
+체크블랙	chk
+체크레드	chr
+체크핑크	chp
+체크블루	chb
+다크브라운	dab
+흑청	dek
+연청	deb
+블랙(크랙)	bla
+크림	cre
+메쉬블랙	meb
+다크실버	das
+탄	tan
+베이비핑크	bap
+도트블랙	dok
+도트화이트	dow
+투명	cle
+스킨	ski
+피치 핑크	pep
+다크그레이	dag
+오렌지브라운	orb
+로즈핑크	rop
+다크베이지	dai
+스카이블루	skb
+민트	min
+차콜	cha
+모카핑크	mop
+코랄	cor
+라임	lim
+초코	cho
+코코아	coc
+버건디	bur
+올리브	oli
+리벳블랙	rbl
+레오파드	leo
+틸	tea`.split('\n').map(l => { const [n, c] = l.split('\t'); return { n: n.trim(), c: c.trim() }; });
+const CODES = new Set(COLORS.map(x => x.c));
+document.getElementById('colors').innerHTML = COLORS.map(x => `<option value="${x.n} (${x.c})"></option>`).join('');
+
+function parseColor(v) {
+  v = (v || '').trim();
+  if (!v) return '';
+  const m = v.match(/\(([a-z]{3})\)\s*$/i); if (m) return m[1].toLowerCase();
+  if (CODES.has(v.toLowerCase())) return v.toLowerCase();
+  const hit = COLORS.find(x => x.n === v || x.n.replace(/\s/g, '') === v.replace(/\s/g, ''));
+  return hit ? hit.c : '';
+}
+
+// ---------- 상태 ----------
+const sources = []; // {name, img, boxes[]}
+const cuts = [];    // {src, rect, canvas(cleaned block), prod{x,y,w,h}, ox, oy, zoom, color, on, out}
+let uid = 0;
+
+const $ = id => document.getElementById(id);
+const drop = $('drop'), fileIn = $('file');
+drop.onclick = () => fileIn.click();
+fileIn.onchange = e => { addFiles([...e.target.files]); fileIn.value = ''; };
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => addFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/'))));
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => { e.preventDefault(); if (e.target.closest('#drop')) return; addFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/'))); });
+
+function loadImg(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img); img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function addFiles(files) {
+  for (const f of files) {
+    let img; try { img = await loadImg(f); } catch { say(f.name + ' 파일을 열 수 없어요. JPG·PNG·WEBP 이미지인지 확인하세요.'); continue; }
+    const src = { id: ++uid, name: f.name, img, boxes: [], pn: '' };
+    sources.push(src);
+    for (const r of splitBlocks(img)) addCut(src, r, r.auto);
+  }
+  renderSources(); renderCuts();
+}
+
+// ---------- 상세페이지를 사진 컷 단위로 나누기 ----------
+function splitBlocks(img) {
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const sw = Math.min(200, W), k = sw / W, sh = Math.max(1, Math.round(H * k));
+  const c = document.createElement('canvas'); c.width = sw; c.height = sh;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, sw, sh);
+  const d = x.getImageData(0, 0, sw, sh).data;
+  const isW = i => Math.min(d[i], d[i + 1], d[i + 2]) >= 243 || d[i + 3] < 10;
+  const whiteRow = y => { let n = 0; for (let i = 0; i < sw; i++) if (isW((y * sw + i) * 4)) n++; return n >= sw * 0.97; };
+  const runs = []; let s = -1;
+  for (let y = 0; y <= sh; y++) {
+    const w = y === sh ? true : whiteRow(y);
+    if (!w && s < 0) s = y;
+    if (w && s >= 0) { runs.push([s, y]); s = -1; }
+  }
+  const out = [];
+  for (const [y0, y1] of runs) {
+    if (y1 - y0 < sw * 0.15) continue; // 글자줄·구분선 등 작은 띠 제외
+    // 좌우 흰 여백 잘라내기
+    let x0 = 0, x1 = sw;
+    const whiteCol = cx => { let n = 0; for (let y = y0; y < y1; y++) if (isW((y * sw + cx) * 4)) n++; return n >= (y1 - y0) * 0.97; };
+    while (x0 < x1 - 1 && whiteCol(x0)) x0++;
+    while (x1 > x0 + 1 && whiteCol(x1 - 1)) x1--;
+    const r = {
+      x: Math.max(0, Math.floor(x0 / k)), y: Math.max(0, Math.floor(y0 / k)),
+      w: 0, h: 0, auto: true
+    };
+    r.w = Math.min(W, Math.ceil(x1 / k)) - r.x; r.h = Math.min(H, Math.ceil(y1 / k)) - r.y;
+    // 흰 띠 경계의 안티앨리어싱 1~2px 제거
+    const inset = Math.min(3, Math.floor(Math.min(r.w, r.h) / 50));
+    if (y0 > 0) { r.y += inset; r.h -= inset; }
+    if (y1 < sh) r.h -= inset;
+    out.push(r);
+  }
+  if (!out.length) out.push({ x: 0, y: 0, w: W, h: H, auto: true });
+  return out;
+}
+
+// ---------- 컷 안에서 상품 찾기 ----------
+function cornerAvg(d, w, h, cx, cy, n) {
+  let r = 0, g = 0, b = 0, c = 0;
+  for (let y = cy; y < cy + n; y++) for (let x = cx; x < cx + n; x++) {
+    const i = (y * w + x) * 4; r += d[i]; g += d[i + 1]; b += d[i + 2]; c++;
+  }
+  return [r / c, g / c, b / c];
+}
+
+function analyze(cut) {
+  const { canvas } = cut;
+  const W = canvas.width, H = canvas.height;
+  const k = Math.min(1, 320 / Math.max(W, H));
+  const w = Math.max(8, Math.round(W * k)), h = Math.max(8, Math.round(H * k));
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data;
+  const n = Math.max(2, Math.round(Math.min(w, h) * 0.03));
+  const TL = cornerAvg(d, w, h, 0, 0, n), TR = cornerAvg(d, w, h, w - n, 0, n),
+        BL = cornerAvg(d, w, h, 0, h - n, n), BR = cornerAvg(d, w, h, w - n, h - n, n);
+  const bgAt = (px, py) => {
+    const u = px / (w - 1), v = py / (h - 1), o = [];
+    for (let j = 0; j < 3; j++) o.push((TL[j] * (1 - u) + TR[j] * u) * (1 - v) + (BL[j] * (1 - u) + BR[j] * u) * v);
+    return o;
+  };
+  const thr = +$('thr').value || 22;
+  let m = new Uint8Array(w * h);
+  for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
+    const i = (py * w + px) * 4, bg = bgAt(px, py);
+    const diff = Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2]));
+    m[py * w + px] = diff > thr ? 1 : 0;
+  }
+  // 팽창 2회 (상품 조각 이어붙이기)
+  const R = 2;
+  for (let it = 0; it < R; it++) {
+    const t = new Uint8Array(m);
+    for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
+      if (m[py * w + px]) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const yy = py + dy, xx = px + dx;
+        if (yy >= 0 && yy < h && xx >= 0 && xx < w && m[yy * w + xx]) { t[py * w + px] = 1; dy = 2; break; }
+      }
+    }
+    m = t;
+  }
+  // 연결 요소
+  const lab = new Int32Array(w * h), comps = [];
+  const st = [];
+  for (let p = 0; p < w * h; p++) {
+    if (!m[p] || lab[p]) continue;
+    const id = comps.length + 1, cp = { a: 0, x0: 1e9, y0: 1e9, x1: -1, y1: -1 };
+    lab[p] = id; st.push(p);
+    while (st.length) {
+      const q = st.pop(), qx = q % w, qy = (q / w) | 0;
+      cp.a++; if (qx < cp.x0) cp.x0 = qx; if (qx > cp.x1) cp.x1 = qx; if (qy < cp.y0) cp.y0 = qy; if (qy > cp.y1) cp.y1 = qy;
+      const nb = [q - 1, q + 1, q - w, q + w];
+      if (qx === 0) nb[0] = -1; if (qx === w - 1) nb[1] = -1;
+      for (const r of nb) if (r >= 0 && r < w * h && m[r] && !lab[r]) { lab[r] = id; st.push(r); }
+    }
+    comps.push(cp);
+  }
+  if (!comps.length) return { prod: { x: 0, y: 0, w: W, h: H }, junk: [], bgAt: (X, Y) => bgAt(X * k, Y * k) };
+  const big = Math.max(...comps.map(c => c.a));
+  const keep = comps.filter(c => c.a >= big * 0.15), junk = comps.filter(c => c.a < big * 0.15);
+  let x0 = Math.min(...keep.map(c => c.x0)), y0 = Math.min(...keep.map(c => c.y0)),
+      x1 = Math.max(...keep.map(c => c.x1)), y1 = Math.max(...keep.map(c => c.y1));
+  x0 = Math.min(w - 1, x0 + R); y0 = Math.min(h - 1, y0 + R); x1 = Math.max(x0, x1 - R); y1 = Math.max(y0, y1 - R);
+  const prod = { x: x0 / k, y: y0 / k, w: (x1 - x0 + 1) / k, h: (y1 - y0 + 1) / k };
+  const pad = 3;
+  const jr = junk.map(c => ({ x: (c.x0 - pad) / k, y: (c.y0 - pad) / k, w: (c.x1 - c.x0 + 1 + 2 * pad) / k, h: (c.y1 - c.y0 + 1 + 2 * pad) / k }))
+    // 상품 박스와 겹치는 건 지우지 않음
+    .filter(r => r.x + r.w < prod.x || r.x > prod.x + prod.w || r.y + r.h < prod.y || r.y > prod.y + prod.h);
+  return { prod, junk: jr, bgAt: (X, Y) => bgAt(Math.max(0, Math.min(w - 1, X * k)), Math.max(0, Math.min(h - 1, Y * k))) };
+}
+
+function buildCut(cut) {
+  const { src, rect } = cut;
+  const c = document.createElement('canvas'); c.width = rect.w; c.height = rect.h;
+  c.getContext('2d').drawImage(src.img, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+  cut.canvas = c;
+  const a = analyze(cut);
+  // 글자(BLACK 등) 같은 작은 요소는 바로 바깥 테두리 픽셀로 이어서 채움 (네모 자국 없이)
+  const x = c.getContext('2d', { willReadFrequently: true });
+  const CW = c.width, CH = c.height;
+  for (const r of a.junk) {
+    const x0 = Math.max(1, Math.floor(r.x)), y0 = Math.max(1, Math.floor(r.y));
+    const x1 = Math.min(CW - 1, Math.ceil(r.x + r.w)), y1 = Math.min(CH - 1, Math.ceil(r.y + r.h));
+    const w = x1 - x0, h = y1 - y0;
+    if (w < 1 || h < 1) continue;
+    const W2 = w + 2, H2 = h + 2;
+    const im = x.getImageData(x0 - 1, y0 - 1, W2, H2), d = im.data;
+    const at = (i, j, k) => d[(j * W2 + i) * 4 + k];
+    for (let j = 1; j <= h; j++) for (let i = 1; i <= w; i++) {
+      const u = i / (w + 1), v = j / (h + 1), p = (j * W2 + i) * 4;
+      for (let k = 0; k < 3; k++) {
+        const hz = at(0, j, k) * (1 - u) + at(w + 1, j, k) * u;
+        const vt = at(i, 0, k) * (1 - v) + at(i, h + 1, k) * v;
+        d[p + k] = (hz + vt) / 2;
+      }
+      d[p + 3] = 255;
+    }
+    x.putImageData(im, x0 - 1, y0 - 1);
+  }
+  cut.prod = a.prod;
+  cut.scaled = null;
+}
+
+function addCut(src, rect, auto) {
+  const cut = { id: ++uid, src, rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h }, ox: 0, oy: 0, zoom: 1, colorText: '', on: true };
+  buildCut(cut);
+  // 너무 납작한 띠(사이즈표·글자 영역 등)는 기본 해제
+  if (auto && rect.h < rect.w * 0.4) cut.on = false;
+  cuts.push(cut);
+  return cut;
+}
+
+// ---------- 합성 ----------
+function scaledBlock(cut, s) {
+  // 큰 축소는 단계적으로 줄여서 계단현상 방지
+  const key = s.toFixed(4);
+  if (cut.scaled && cut.scaled.key === key) return cut.scaled.c;
+  let c = cut.canvas, cw = c.width, ch = c.height;
+  const tw = Math.max(1, Math.round(c.width * s)), th = Math.max(1, Math.round(c.height * s));
+  while (cw / 2 > tw) {
+    const n = document.createElement('canvas'); n.width = Math.round(cw / 2); n.height = Math.round(ch / 2);
+    const x = n.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, n.width, n.height);
+    c = n; cw = n.width; ch = n.height;
+  }
+  const f = document.createElement('canvas'); f.width = tw; f.height = th;
+  const x = f.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, tw, th);
+  cut.scaled = { key, c: f };
+  return f;
+}
+
+function render(cut, ctx, guides) {
+  const p = cut.prod;
+  const gap = Math.max(0, Math.min(200, +$('gap').value || 0));
+  const s = (INNER - 2 * gap) / Math.max(p.w, p.h) * cut.zoom;
+  const C = scaledBlock(cut, s), w = C.width, h = C.height;
+  const X0 = Math.round(OUT / 2 - (p.x + p.w / 2) * s + cut.ox);
+  const Y0 = Math.round(OUT / 2 - (p.y + p.h / 2) * s + cut.oy);
+  const X1 = X0 + w, Y1 = Y0 + h;
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, OUT, OUT);
+  // 사진이 모자란 부분은 가장자리 픽셀을 늘려서 채움(배경 자연스럽게 연장)
+  const e = 2; // 가장자리에서 약간 안쪽 픽셀 사용
+  if (X0 > 0) ctx.drawImage(C, e, 0, 1, h, 0, Y0, X0, h);
+  if (X1 < OUT) ctx.drawImage(C, w - 1 - e, 0, 1, h, X1, Y0, OUT - X1, h);
+  if (Y0 > 0) ctx.drawImage(C, 0, e, w, 1, X0, 0, w, Y0);
+  if (Y1 < OUT) ctx.drawImage(C, 0, h - 1 - e, w, 1, X0, Y1, w, OUT - Y1);
+  if (X0 > 0 && Y0 > 0) ctx.drawImage(C, e, e, 1, 1, 0, 0, X0, Y0);
+  if (X1 < OUT && Y0 > 0) ctx.drawImage(C, w - 1 - e, e, 1, 1, X1, 0, OUT - X1, Y0);
+  if (X0 > 0 && Y1 < OUT) ctx.drawImage(C, e, h - 1 - e, 1, 1, 0, Y1, X0, OUT - Y1);
+  if (X1 < OUT && Y1 < OUT) ctx.drawImage(C, w - 1 - e, h - 1 - e, 1, 1, X1, Y1, OUT - X1, OUT - Y1);
+  ctx.drawImage(C, X0, Y0);
+  if (guides) {
+    ctx.strokeStyle = '#00b7ff'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (const g of [G1, OUT / 2, G2]) { ctx.moveTo(g, 0); ctx.lineTo(g, OUT); ctx.moveTo(0, g); ctx.lineTo(OUT, g); }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function fileName(cut) {
+  const pn = (cut.src.pn || '').trim() || $('pn').value.trim();
+  const code = parseColor(cut.colorText);
+  return { pn, code, base: pn && code ? pn + code : '' };
+}
+
+function finalNames() {
+  const used = {}, names = new Map();
+  for (const c of cuts) {
+    if (!c.on) continue;
+    const { base } = fileName(c);
+    if (!base) continue;
+    used[base] = (used[base] || 0) + 1;
+    names.set(c, used[base] === 1 ? base + '.jpg' : `${base}_${used[base]}.jpg`);
+  }
+  return names;
+}
+
+// ---------- 화면 ----------
+function renderSources() {
+  const box = $('sources'); box.innerHTML = '';
+  if (!sources.length) { box.innerHTML = '<div class="empty">아직 올린 이미지가 없어요.</div>'; return; }
+  for (const src of sources) {
+    const el = document.createElement('div'); el.className = 'src';
+    el.innerHTML = `<div class="wrap"><img></div><label class="pnrow">품번 <input class="spn" id="spn-${src.id}" type="text" inputmode="numeric"></label><div class="name"><span></span><button style="padding:0 6px">삭제</button></div>`;
+    el.querySelector('.name span').textContent = src.name;
+    const spn = el.querySelector('.spn');
+    spn.value = src.pn; spn.placeholder = $('pn').value.trim() || '예: 1958';
+    spn.oninput = () => { src.pn = spn.value; refreshNames(); };
+    const wrap = el.querySelector('.wrap'), im = el.querySelector('img');
+    im.src = src.img.src; im.draggable = false;
+    el.querySelector('button').onclick = () => {
+      sources.splice(sources.indexOf(src), 1);
+      for (let i = cuts.length - 1; i >= 0; i--) if (cuts[i].src === src) cuts.splice(i, 1);
+      renderSources(); renderCuts();
+    };
+    const drawBoxes = () => {
+      wrap.querySelectorAll('.box').forEach(b => b.remove());
+      const k = im.clientWidth / src.img.naturalWidth;
+      cuts.filter(c => c.src === src).forEach(c => {
+        const b = document.createElement('div'); b.className = 'box';
+        Object.assign(b.style, { left: c.rect.x * k + 'px', top: c.rect.y * k + 'px', width: c.rect.w * k + 'px', height: c.rect.h * k + 'px', opacity: c.on ? 1 : .35 });
+        b.innerHTML = `<span>${cuts.indexOf(c) + 1}</span>`;
+        wrap.appendChild(b);
+      });
+    };
+    src.redraw = drawBoxes;
+    im.onload = drawBoxes;
+    // 드래그로 컷 직접 추가
+    let st = null, dr = null;
+    wrap.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      const r = im.getBoundingClientRect(); st = { x: e.clientX - r.left, y: e.clientY - r.top };
+      dr = document.createElement('div'); dr.className = 'draw'; wrap.appendChild(dr);
+      wrap.setPointerCapture(e.pointerId);
+    });
+    wrap.addEventListener('pointermove', e => {
+      if (!st) return;
+      const r = im.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      Object.assign(dr.style, { left: Math.min(x, st.x) + 'px', top: Math.min(y, st.y) + 'px', width: Math.abs(x - st.x) + 'px', height: Math.abs(y - st.y) + 'px' });
+    });
+    wrap.addEventListener('pointerup', e => {
+      if (!st) return;
+      const r = im.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      const k = src.img.naturalWidth / im.clientWidth;
+      const rect = {
+        x: Math.max(0, Math.round(Math.min(x, st.x) * k)), y: Math.max(0, Math.round(Math.min(y, st.y) * k)),
+        w: Math.round(Math.abs(x - st.x) * k), h: Math.round(Math.abs(y - st.y) * k)
+      };
+      rect.w = Math.min(rect.w, src.img.naturalWidth - rect.x); rect.h = Math.min(rect.h, src.img.naturalHeight - rect.y);
+      dr.remove(); st = null;
+      if (rect.w > 30 && rect.h > 30) { addCut(src, rect, false); renderCuts(); }
+    });
+    box.appendChild(el);
+    if (im.complete) drawBoxes();
+  }
+}
+
+function renderCuts() {
+  const box = $('cuts'); box.innerHTML = '';
+  if (!cuts.length) { box.innerHTML = '<div class="empty">원본을 올리면 여기에 나타나요.</div>'; updateBar(); return; }
+  cuts.forEach((cut, i) => {
+    const el = document.createElement('div'); el.className = 'cut' + (cut.on ? '' : ' off');
+    el.innerHTML = `
+      <div class="row"><input type="checkbox" ${cut.on ? 'checked' : ''}><span class="num">#${i + 1} · ${cut.src.name}</span><span style="flex:1"></span><button title="컷 삭제" style="padding:0 7px">✕</button></div>
+      <canvas width="${OUT}" height="${OUT}"></canvas>
+      <div class="row"><input type="text" list="colors" placeholder="색상 입력 (예: 블랙, bla)" value="${cut.colorText}"></div>
+      <div class="row"><span class="fn"></span><span style="flex:1"></span><button class="dl">저장</button></div>`;
+    const cv = el.querySelector('canvas');
+    cut.view = cv; cut.el = el;
+    render(cut, cv.getContext('2d'), $('showGuide').checked);
+    cv.onclick = () => openEdit(cut);
+    el.querySelector('input[type=checkbox]').onchange = e => { cut.on = e.target.checked; el.classList.toggle('off', !cut.on); refreshNames(); cut.src.redraw && cut.src.redraw(); };
+    el.querySelector('button[title]').onclick = () => { cuts.splice(cuts.indexOf(cut), 1); renderCuts(); cut.src.redraw && cut.src.redraw(); };
+    const ci = el.querySelector('input[type=text]');
+    ci.oninput = () => { cut.colorText = ci.value; refreshNames(); };
+    el.querySelector('.dl').onclick = () => saveOne(cut);
+    box.appendChild(el);
+  });
+  sources.forEach(s => s.redraw && s.redraw());
+  refreshNames();
+}
+
+function refreshNames() {
+  const names = finalNames();
+  for (const c of cuts) {
+    if (!c.el) continue;
+    const fn = c.el.querySelector('.fn'), { pn, code } = fileName(c);
+    if (!pn) { fn.textContent = '품번을 입력하세요'; fn.className = 'fn bad'; }
+    else if (!code) { fn.textContent = c.colorText ? '없는 색상이에요' : '색상을 입력하세요'; fn.className = 'fn bad'; }
+    else { fn.textContent = names.get(c) || pn + code + '.jpg'; fn.className = 'fn'; }
+    c.el.querySelector('.dl').disabled = !(pn && code);
+  }
+  updateBar();
+}
+
+function updateBar() {
+  const sel = cuts.filter(c => c.on), ready = sel.filter(c => fileName(c).base);
+  $('count').textContent = cuts.length ? `${cuts.length}개 중 ${sel.length}개 선택 · 저장 준비 ${ready.length}개` + (sel.length > ready.length ? ` (색상 미입력 ${sel.length - ready.length}개)` : '') : '';
+  $('dlAll').disabled = $('dlEach').disabled = !ready.length;
+}
+
+$('pn').oninput = () => {
+  document.querySelectorAll('.spn').forEach(i => i.placeholder = $('pn').value.trim() || '예: 1958');
+  refreshNames();
+};
+$('showGuide').onchange = () => cuts.forEach(c => c.view && render(c, c.view.getContext('2d'), $('showGuide').checked));
+$('gap').oninput = () => cuts.forEach(c => c.view && render(c, c.view.getContext('2d'), $('showGuide').checked));
+$('thr').onchange =() => { cuts.forEach(c => { buildCut(c); }); renderCuts(); };
+$('allOn').onclick = () => { cuts.forEach(c => c.on = true); renderCuts(); };
+$('allOff').onclick = () => { cuts.forEach(c => c.on = false); renderCuts(); };
+
+// ---------- 저장 ----------
+function toBlob(cut) {
+  const c = document.createElement('canvas'); c.width = c.height = OUT;
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, OUT, OUT);
+  render(cut, x, false);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', JPG_Q));
+}
+function say(t) { const m = $('msg'); m.textContent = t || ''; m.hidden = !t; }
+// claude.ai 링크에서는 downloads 기능으로, 내 컴퓨터에서 연 파일은 일반 다운로드로 저장
+let dlCap; const dlReady = (async () => {
+  try { dlCap = window.claude && window.claude.use ? await window.claude.use('downloads') : null; } catch { dlCap = null; }
+})();
+async function download(blob, name) {
+  say('');
+  await Promise.race([dlReady, new Promise(r => setTimeout(r, 1500))]);
+  if (dlCap) {
+    try { await dlCap.save({ filename: name, data: blob }); return true; }
+    catch (e) {
+      if (e && e.code === 'declined') return false;
+      if (e && e.code === 'rate_limited') { say('저장 확인 창이 이미 열려 있어요. 닫은 뒤 다시 눌러 주세요.'); return false; }
+      say('이 화면에서는 저장할 수 없어요. (' + (e && e.code || '오류') + ')'); return false;
+    }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return true;
+}
+async function saveOne(cut) {
+  const names = finalNames(); const name = names.get(cut) || fileName(cut).base + '.jpg';
+  download(await toBlob(cut), name);
+}
+function skippedNote() {
+  const off = cuts.filter(c => !c.on).map(c => '#' + (cuts.indexOf(c) + 1));
+  const noColor = cuts.filter(c => c.on && !fileName(c).base).map(c => '#' + (cuts.indexOf(c) + 1));
+  const parts = [];
+  if (noColor.length) parts.push(`${noColor.join(', ')}은(는) 색상이 없어서 빠졌어요`);
+  if (off.length) parts.push(`${off.join(', ')}은(는) 체크가 해제돼 있어서 빠졌어요`);
+  return parts.join(' · ');
+}
+$('dlEach').onclick = async () => {
+  const names = finalNames();
+  for (const [cut, name] of names) {
+    const ok = await download(await toBlob(cut), name);
+    if (!ok && dlCap) break;
+    if (!dlCap) await new Promise(r => setTimeout(r, 350));
+  }
+};
+$('dlAll').onclick = async () => {
+  const names = finalNames();
+  if (typeof JSZip === 'undefined') { say('인터넷 연결이 없어 ZIP을 만들 수 없어요. "전체 개별 저장"을 사용하세요.'); return; }
+  const zip = new JSZip();
+  for (const [cut, name] of names) zip.file(name, await toBlob(cut));
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const pns = [...new Set([...names.keys()].map(c => fileName(c).pn))];
+  const zipName = (pns.length === 1 ? pns[0] : pns.length <= 3 ? pns.join('_') : 'thumbnails_' + pns.length + '품번') + '.zip';
+  const ok = await download(blob, zipName);
+  if (ok) {
+    const note = skippedNote();
+    say(`ZIP에 ${names.size}장을 담았어요: ${[...names.values()].join(', ')}` + (note ? ` — ${note}` : ''));
+  }
+};
+
+// ---------- 편집 창 ----------
+let cur = null;
+const ed = $('edit'), ex = ed.getContext('2d');
+function drawEdit() { render(cur, ex, true); $('zoom').value = Math.round(cur.zoom * 100); $('zv').textContent = Math.round(cur.zoom * 100) + '%'; }
+function openEdit(cut) { cur = cut; $('modal').classList.add('on'); drawEdit(); }
+function closeEdit() { $('modal').classList.remove('on'); if (cur && cur.view) render(cur, cur.view.getContext('2d'), $('showGuide').checked); cur = null; }
+$('close').onclick = closeEdit;
+$('modal').onclick = e => { if (e.target.id === 'modal') closeEdit(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && cur) closeEdit(); });
+$('zoom').oninput = e => { cur.zoom = e.target.value / 100; drawEdit(); };
+$('reset').onclick = () => { cur.ox = cur.oy = 0; cur.zoom = 1; drawEdit(); };
+let drag = null;
+ed.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, ox: cur.ox, oy: cur.oy }; ed.setPointerCapture(e.pointerId); ed.style.cursor = 'grabbing'; });
+ed.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const k = OUT / ed.clientWidth;
+  cur.ox = drag.ox + (e.clientX - drag.x) * k; cur.oy = drag.oy + (e.clientY - drag.y) * k; drawEdit();
+});
+ed.addEventListener('pointerup', () => { drag = null; ed.style.cursor = 'grab'; });
+ed.addEventListener('wheel', e => { e.preventDefault(); cur.zoom = Math.max(.5, Math.min(1.5, cur.zoom * (e.deltaY < 0 ? 1.02 : 0.98))); drawEdit(); }, { passive: false });
+</script>
+
+</body>
+</html>
